@@ -12,10 +12,38 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+/**
+ * Centralized exception-to-HTTP-response mapping for all REST controllers.
+ *
+ * <p>Every handler returns a consistent JSON error envelope with fields in a
+ * predictable order: {@code timestamp}, {@code status}, {@code error},
+ * {@code message}/{@code messages}. Uses {@link java.util.LinkedHashMap} to
+ * preserve insertion order.</p>
+ *
+ * <p>Spring evaluates {@code @ExceptionHandler} methods in order of specificity —
+ * the catch-all {@code handleGeneral(Exception)} fires only when no other
+ * handler matches.</p>
+ *
+ * <h3>Error response envelope</h3>
+ * <pre>{@code
+ * {
+ *   "timestamp": "ISO-8601",
+ *   "status": 400,
+ *   "error": "Validation failed",
+ *   "messages": ["field: error"]
+ * }
+ * }</pre>
+ */
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+  /**
+   * Handles malformed or unparseable request bodies (invalid JSON syntax, type mismatches).
+   *
+   * @param ex the exception thrown during HTTP message deserialization
+   * @return {@code 400 Bad Request} with a descriptive error message
+   */
   @ExceptionHandler(HttpMessageNotReadableException.class)
   public ResponseEntity<Map<String, Object>> handleMalformedRequest(
       HttpMessageNotReadableException ex) {
@@ -27,6 +55,15 @@ public class GlobalExceptionHandler {
     return ResponseEntity.badRequest().body(body);
   }
 
+  /**
+   * Handles Jakarta Bean Validation failures ({@code @Valid} violations on DTOs).
+   *
+   * <p>Collects all field-level errors into a {@code messages} list for the response.
+   * Each entry follows the format {@code "fieldName: error message"}.</p>
+   *
+   * @param ex the exception containing binding result with field errors
+   * @return {@code 400 Bad Request} with field-level validation messages
+   */
   @ExceptionHandler(MethodArgumentNotValidException.class)
   public ResponseEntity<Map<String, Object>> handleValidation(
       MethodArgumentNotValidException ex) {
@@ -42,6 +79,15 @@ public class GlobalExceptionHandler {
     return ResponseEntity.badRequest().body(body);
   }
 
+  /**
+   * Handles business-level argument errors ({@code IllegalArgumentException}).
+   *
+   * <p>The exception message is included in the response body. Useful for
+   * invalid argument combinations that pass validation but fail business rules.</p>
+   *
+   * @param ex the exception with the descriptive message
+   * @return {@code 400 Bad Request} with the exception message
+   */
   @ExceptionHandler(IllegalArgumentException.class)
   public ResponseEntity<Map<String, Object>> handleBadArgument(IllegalArgumentException ex) {
     Map<String, Object> body = new LinkedHashMap<>();
@@ -52,6 +98,16 @@ public class GlobalExceptionHandler {
     return ResponseEntity.badRequest().body(body);
   }
 
+  /**
+   * Handles duplicate event submissions (idempotency violation).
+   *
+   * <p>Thrown by {@code WatchdogService.processEvent()} when
+   * {@code eventRepository.existsById()} returns {@code true} before
+   * any trace mutation occurs.</p>
+   *
+   * @param ex the exception with the event ID that was already processed
+   * @return {@code 409 Conflict}
+   */
   @ExceptionHandler(DuplicateEventException.class)
   public ResponseEntity<Map<String, Object>> handleDuplicate(DuplicateEventException ex) {
     Map<String, Object> body = new LinkedHashMap<>();
@@ -62,6 +118,15 @@ public class GlobalExceptionHandler {
     return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
   }
 
+  /**
+   * Handles queries for non-existent traces.
+   *
+   * <p>Thrown by {@code WatchdogService.getTraceStatus()} when
+   * {@code traceRepository.findById()} returns empty.</p>
+   *
+   * @param ex the exception containing the unknown {@code traceId}
+   * @return {@code 404 Not Found}
+   */
   @ExceptionHandler(TraceNotFoundException.class)
   public ResponseEntity<Map<String, Object>> handleNotFound(TraceNotFoundException ex) {
     Map<String, Object> body = new LinkedHashMap<>();
@@ -72,6 +137,15 @@ public class GlobalExceptionHandler {
     return ResponseEntity.status(HttpStatus.NOT_FOUND).body(body);
   }
 
+  /**
+   * Catch-all handler for unexpected exceptions.
+   *
+   * <p>Logs the full stack trace at ERROR level but returns a safe, generic message
+   * to the client to avoid leaking internal implementation details.</p>
+   *
+   * @param ex the unexpected exception
+   * @return {@code 500 Internal Server Error} with a masked message
+   */
   @ExceptionHandler(Exception.class)
   public ResponseEntity<Map<String, Object>> handleGeneral(Exception ex) {
     log.error("Unhandled exception", ex);
